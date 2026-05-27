@@ -1,37 +1,22 @@
 import express from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import twilio from "twilio";
 
 const app = express();
+app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
 const conversations = {};
 
-// Vérification webhook
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-// Réception des messages
-app.post("/webhook", async (req, res) => {
+// Webhook Twilio
+app.post("/webhook/twilio", async (req, res) => {
   try {
-    const entry = req.body.entry?.[0];
-    const change = entry?.changes?.[0];
-    const message = change?.value?.messages?.[0];
+    const from = req.body.From;
+    const userText = req.body.Body;
 
-    if (!message || message.type !== "text") return res.sendStatus(200);
-
-    const from = message.from;
-    const userText = message.text.body;
+    if (!from || !userText) return res.sendStatus(200);
 
     if (!conversations[from]) conversations[from] = [];
     conversations[from].push({ role: "user", parts: [{ text: userText }] });
@@ -46,30 +31,20 @@ app.post("/webhook", async (req, res) => {
 
     conversations[from].push({ role: "model", parts: [{ text: reply }] });
 
-    await sendWhatsAppMessage(from, reply);
-    res.sendStatus(200);
+    // Répondre via Twilio
+    const twiml = new twilio.twiml.MessagingResponse();
+    twiml.message(reply);
+
+    res.type("text/xml");
+    res.send(twiml.toString());
+
   } catch (error) {
     console.error("Erreur:", error);
     res.sendStatus(500);
   }
 });
 
-async function sendWhatsAppMessage(to, text) {
-  const url = `https://graph.facebook.com/v19.0/${process.env.PHONE_NUMBER_ID}/messages`;
-  await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: text },
-    }),
-  });
-}
+app.get("/", (req, res) => res.send("Bot en ligne !"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Serveur démarré sur le port ${PORT}`));
